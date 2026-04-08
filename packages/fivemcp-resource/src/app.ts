@@ -1,0 +1,588 @@
+import { z } from "zod";
+
+import {
+  ActionResultSchema,
+  AnnounceRequestSchema,
+  AuditEntrySchema,
+  AuditQuerySchema,
+  AuditResponseSchema,
+  DEFAULT_ANNOUNCEMENT_TEMPLATE,
+  EmptyObjectSchema,
+  ErrorEnvelopeSchema,
+  LOOPBACK_ADDRESSES,
+  PlayerParamsSchema,
+  PlayersResponseSchema,
+  ResourceParamsSchema,
+  ResourcesResponseSchema,
+  StatusSchema,
+  type ActionResult,
+  type AuditEntry,
+  type ErrorEnvelope,
+} from "@fivemcp/shared";
+
+import { AuditLog } from "./audit";
+import type { HttpRequest, HttpResponse } from "./httpTypes";
+import { Router } from "./router";
+import { createDefaultRuntime, type FiveMRuntime } from "./runtime";
+
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+    readonly details?: string,
+  ) {
+    super(message);
+  }
+}
+
+interface NormalizedRequest {
+  address: string;
+  method: string;
+  pathname: string;
+  query: URLSearchParams;
+  headers: Record<string, string>;
+  bodyJson: unknown;
+}
+
+interface RouteContext {
+  auditLog: AuditLog;
+  request: NormalizedRequest;
+  response: HttpResponse;
+  runtime: FiveMRuntime;
+}
+
+function errorEnvelopeFrom(error: HttpError): ErrorEnvelope {
+  return ErrorEnvelopeSchema.parse({
+    ok: false,
+    error: {
+      code: error.code,
+      message: error.message,
+      status: error.status,
+      details: error.details,
+    },
+  });
+}
+
+function sendJson(response: HttpResponse, status: number, body: unknown): void {
+  response.writeHead(status, { "Content-Type": "application/json" });
+  response.send(JSON.stringify(body));
+}
+
+function normalizeHeaders(headers: Record<string, string>): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    normalized[key.toLowerCase()] = value;
+  }
+  return normalized;
+}
+
+function parseWithSchema<T>(
+  schema: z.ZodType<T>,
+  value: unknown,
+  message: string,
+): T {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    throw new HttpError(400, "validation_error", message, result.error.message);
+  }
+  return result.data;
+}
+
+function assertLoopback(address: string): void {
+  if (!LOOPBACK_ADDRESSES.has(address)) {
+    throw new HttpError(
+      403,
+      "forbidden_origin",
+      "Only loopback requests are allowed.",
+    );
+  }
+}
+
+function assertAuthorized(request: NormalizedRequest, runtime: FiveMRuntime): void {
+  const expectedToken = runtime.getToken();
+  if (!expectedToken) {
+    throw new HttpError(
+      503,
+      "server_not_configured",
+      "fivemcp_token is not configured.",
+    );
+  }
+
+  const header = request.headers.authorization ?? "";
+  if (!header.startsWith("Bearer ")) {
+    throw new HttpError(
+      401,
+      "missing_bearer_token",
+      "Authorization header must be a Bearer token.",
+    );
+  }
+
+  const providedToken = header.slice("Bearer ".length).trim();
+  if (!providedToken || providedToken !== expectedToken) {
+    throw new HttpError(401, "invalid_bearer_token", "Bearer token is invalid.");
+  }
+}
+
+function sanitizeCommandValue(value: string): string {
+  return value
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/"/g, '\\"')
+    .trim();
+}
+
+function buildAnnouncementCommand(
+  template: string,
+  message: string,
+): string {
+  const commandTemplate = template.trim() || DEFAULT_ANNOUNCEMENT_TEMPLATE;
+  const safeMessage = sanitizeCommandValue(message);
+  if (commandTemplate.includes("{message}")) {
+    return commandTemplate.replaceAll("{message}", safeMessage);
+  }
+  return `${commandTemplate} ${safeMessage}`.trim();
+}
+
+function createAuditEntry(
+  runtime: FiveMRuntime,
+  action: string,
+  target: string | null,
+  origin: string,
+  success: boolean,
+  error: string | null,
+): AuditEntry {
+  return AuditEntrySchema.parse({
+    id: runtime.randomId(),
+    timestamp: runtime.nowIso(),
+    action,
+    target,
+    origin,
+    success,
+    error,
+  });
+}
+
+async function readBody(request: HttpRequest): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    let settled = false;
+
+    const finish = (value: string): void => {
+      if (!settled) {
+        settled = true;
+        resolve(value);
+      }
+    };
+
+    request.setCancelHandler(() => {
+      if (!settled) {
+        settled = true;
+        reject(
+          new HttpError(499, "request_cancelled", "The request was cancelled."),
+        );
+      }
+    });
+
+    request.setDataHandler((data) => {
+      finish(data);
+    });
+
+    setTimeout(() => finish(""), 0);
+  });
+}
+
+async function normalizeRequest(request: HttpRequest): Promise<NormalizedRequest> {
+  const url = new URL(
+    request.path.startsWith("/") ? request.path : `/${request.path}`,
+    "http://127.0.0.1",
+  );
+  const method = request.method.toUpperCase();
+  const headers = normalizeHeaders(request.headers);
+  let bodyJson: unknown = {};
+
+  if (method === "POST") {
+    const bodyText = await readBody(request);
+    if (bodyText.trim().length > 0) {
+      try {
+        bodyJson = JSON.parse(bodyText);
+      } catch (error) {
+        throw new HttpError(
+          400,
+          "invalid_json",
+          "Request body must be valid JSON.",
+          (error as Error).message,
+        );
+      }
+    }
+  }
+
+  return {
+    address: request.address,
+    method,
+    pathname: url.pathname,
+    query: url.searchParams,
+    headers,
+    bodyJson,
+  };
+}
+
+function createActionResult(
+  runtime: FiveMRuntime,
+  action: string,
+  target: string | null,
+  message: string,
+  auditEntry: AuditEntry,
+): ActionResult {
+  return ActionResultSchema.parse({
+    ok: true,
+    action,
+    target,
+    message,
+    auditEntry,
+  });
+}
+
+export interface FiveMHttpApp {
+  handle(request: HttpRequest, response: HttpResponse): Promise<void>;
+}
+
+export function createFiveMHttpApp(
+  runtime: FiveMRuntime = createDefaultRuntime(),
+  auditLog: AuditLog = new AuditLog(),
+): FiveMHttpApp {
+  const router = new Router<RouteContext>();
+
+  router.get("/v1/status", ({ response, runtime: currentRuntime }) => {
+    sendJson(response, 200, StatusSchema.parse(currentRuntime.getStatus()));
+  });
+
+  router.get("/v1/players", ({ response, runtime: currentRuntime }) => {
+    sendJson(
+      response,
+      200,
+      PlayersResponseSchema.parse({ players: currentRuntime.listPlayers() }),
+    );
+  });
+
+  router.get("/v1/players/:serverId", ({ response, runtime: currentRuntime }, match) => {
+    const params = parseWithSchema(
+      PlayerParamsSchema,
+      match.params,
+      "Player serverId must be a positive integer.",
+    );
+    const player = currentRuntime.findPlayer(params.serverId);
+    if (!player) {
+      throw new HttpError(404, "player_not_found", "Player is not online.");
+    }
+    sendJson(response, 200, player);
+  });
+
+  router.get("/v1/resources", ({ response, runtime: currentRuntime }) => {
+    sendJson(
+      response,
+      200,
+      ResourcesResponseSchema.parse({
+        resources: currentRuntime.listResources(),
+      }),
+    );
+  });
+
+  router.get(
+    "/v1/resources/:resourceName",
+    ({ response, runtime: currentRuntime }, match) => {
+      const params = parseWithSchema(
+        ResourceParamsSchema,
+        match.params,
+        "Resource name is required.",
+      );
+      const resource = currentRuntime.findResource(params.resourceName);
+      if (!resource) {
+        throw new HttpError(404, "resource_not_found", "Resource was not found.");
+      }
+      sendJson(response, 200, resource);
+    },
+  );
+
+  router.get("/v1/audit", ({ request, response, auditLog: currentAuditLog }) => {
+    const query = parseWithSchema(
+      AuditQuerySchema,
+      { limit: request.query.get("limit") ?? undefined },
+      "Audit limit must be between 1 and 100.",
+    );
+    sendJson(
+      response,
+      200,
+      AuditResponseSchema.parse({
+        audit: currentAuditLog.list(query.limit),
+      }),
+    );
+  });
+
+  router.post("/v1/server/announce", ({ request, response, runtime: currentRuntime, auditLog: currentAuditLog }) => {
+    const payload = parseWithSchema(
+      AnnounceRequestSchema,
+      request.bodyJson,
+      "Announcement request body is invalid.",
+    );
+    const command = buildAnnouncementCommand(
+      currentRuntime.getAnnouncementTemplate(),
+      payload.message,
+    );
+    let auditEntry = createAuditEntry(
+      currentRuntime,
+      "broadcast_message",
+      null,
+      request.address,
+      true,
+      null,
+    );
+
+    try {
+      currentRuntime.executeCommand(command);
+    } catch (error) {
+      auditEntry = createAuditEntry(
+        currentRuntime,
+        "broadcast_message",
+        null,
+        request.address,
+        false,
+        (error as Error).message,
+      );
+      currentAuditLog.append(auditEntry);
+      throw new HttpError(
+        500,
+        "command_execution_failed",
+        "Failed to broadcast message.",
+        (error as Error).message,
+      );
+    }
+
+    currentAuditLog.append(auditEntry);
+    sendJson(
+      response,
+      200,
+      createActionResult(
+        currentRuntime,
+        "broadcast_message",
+        null,
+        "Broadcast command sent.",
+        auditEntry,
+      ),
+    );
+  });
+
+  router.post("/v1/server/shutdown", ({ request, response, runtime: currentRuntime, auditLog: currentAuditLog }) => {
+    parseWithSchema(
+      EmptyObjectSchema,
+      request.bodyJson,
+      "Shutdown request body must be an empty object.",
+    );
+
+    const command = 'quit "fivemcp shutdown requested"';
+    let auditEntry = createAuditEntry(
+      currentRuntime,
+      "shutdown_server",
+      null,
+      request.address,
+      true,
+      null,
+    );
+    currentAuditLog.append(auditEntry);
+
+    try {
+      currentRuntime.executeCommand(command);
+    } catch (error) {
+      auditEntry = createAuditEntry(
+        currentRuntime,
+        "shutdown_server",
+        null,
+        request.address,
+        false,
+        (error as Error).message,
+      );
+      currentAuditLog.append(auditEntry);
+      throw new HttpError(
+        500,
+        "command_execution_failed",
+        "Failed to shut down the server.",
+        (error as Error).message,
+      );
+    }
+
+    sendJson(
+      response,
+      200,
+      createActionResult(
+        currentRuntime,
+        "shutdown_server",
+        null,
+        "Shutdown command sent.",
+        auditEntry,
+      ),
+    );
+  });
+
+  router.post("/v1/resources/refresh", ({ request, response, runtime: currentRuntime, auditLog: currentAuditLog }) => {
+    parseWithSchema(
+      EmptyObjectSchema,
+      request.bodyJson,
+      "Refresh request body must be an empty object.",
+    );
+
+    const auditEntry = createAuditEntry(
+      currentRuntime,
+      "refresh_resources",
+      null,
+      request.address,
+      true,
+      null,
+    );
+    try {
+      currentRuntime.executeCommand("refresh");
+    } catch (error) {
+      const failedAuditEntry = createAuditEntry(
+        currentRuntime,
+        "refresh_resources",
+        null,
+        request.address,
+        false,
+        (error as Error).message,
+      );
+      currentAuditLog.append(failedAuditEntry);
+      throw new HttpError(
+        500,
+        "command_execution_failed",
+        "Failed to refresh resources.",
+        (error as Error).message,
+      );
+    }
+
+    currentAuditLog.append(auditEntry);
+    sendJson(
+      response,
+      200,
+      createActionResult(
+        currentRuntime,
+        "refresh_resources",
+        null,
+        "Refresh command sent.",
+        auditEntry,
+      ),
+    );
+  });
+
+  for (const [pathAction, commandAction] of [
+    ["start", "start_resource"],
+    ["stop", "stop_resource"],
+    ["restart", "restart_resource"],
+    ["ensure", "ensure_resource"],
+  ] as const) {
+    router.post(
+      `/v1/resources/:resourceName/${pathAction}`,
+      ({ request, response, runtime: currentRuntime, auditLog: currentAuditLog }, match) => {
+        parseWithSchema(
+          EmptyObjectSchema,
+          request.bodyJson,
+          `${pathAction} request body must be an empty object.`,
+        );
+        const params = parseWithSchema(
+          ResourceParamsSchema,
+          match.params,
+          "Resource name is required.",
+        );
+
+        const resource = currentRuntime.findResource(params.resourceName);
+        if (!resource) {
+          throw new HttpError(
+            404,
+            "resource_not_found",
+            "Resource was not found.",
+          );
+        }
+
+        const command = `${pathAction} ${params.resourceName}`;
+        const auditEntry = createAuditEntry(
+          currentRuntime,
+          commandAction,
+          params.resourceName,
+          request.address,
+          true,
+          null,
+        );
+
+        try {
+          currentRuntime.executeCommand(command);
+        } catch (error) {
+          const failedAuditEntry = createAuditEntry(
+            currentRuntime,
+            commandAction,
+            params.resourceName,
+            request.address,
+            false,
+            (error as Error).message,
+          );
+          currentAuditLog.append(failedAuditEntry);
+          throw new HttpError(
+            500,
+            "command_execution_failed",
+            `Failed to ${pathAction} resource.`,
+            (error as Error).message,
+          );
+        }
+
+        currentAuditLog.append(auditEntry);
+        sendJson(
+          response,
+          200,
+          createActionResult(
+            currentRuntime,
+            commandAction,
+            params.resourceName,
+            `Resource ${pathAction} command sent.`,
+            auditEntry,
+          ),
+        );
+      },
+    );
+  }
+
+  return {
+    async handle(request, response) {
+      try {
+        const normalizedRequest = await normalizeRequest(request);
+        assertLoopback(normalizedRequest.address);
+        assertAuthorized(normalizedRequest, runtime);
+
+        const context: RouteContext = {
+          auditLog,
+          request: normalizedRequest,
+          response,
+          runtime,
+        };
+
+        const matched = await router.handle(
+          normalizedRequest.method,
+          normalizedRequest.pathname,
+          context,
+        );
+
+        if (!matched) {
+          throw new HttpError(404, "route_not_found", "Route was not found.");
+        }
+      } catch (error) {
+        if (error instanceof HttpError) {
+          sendJson(response, error.status, errorEnvelopeFrom(error));
+          return;
+        }
+
+        const fallbackError = new HttpError(
+          500,
+          "internal_error",
+          "An unexpected error occurred.",
+          (error as Error).message,
+        );
+        sendJson(response, 500, errorEnvelopeFrom(fallbackError));
+      }
+    },
+  };
+}
