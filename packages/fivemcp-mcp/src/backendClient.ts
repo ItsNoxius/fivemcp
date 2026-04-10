@@ -3,6 +3,7 @@ import {
   AnnounceRequestSchema,
   AuditResponseSchema,
   ErrorEnvelopeSchema,
+  FIVEMCP_TOKEN_HEADER,
   type ActionResult,
   type AnnounceRequest,
   type AuditResponse,
@@ -64,7 +65,7 @@ export class BackendClient {
       const response = await fetch(`${this.config.backendBaseUrl}${path}`, {
         method,
         headers: {
-          Authorization: `Bearer ${this.config.backendToken}`,
+          [FIVEMCP_TOKEN_HEADER]: this.config.backendToken,
           "Content-Type": "application/json",
         },
         body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,

@@ -2,6 +2,8 @@ export const FIVEMCP_RESOURCE_NAME = "fivemcp";
 export const FIVEMCP_API_VERSION = "v1";
 export const FIVEMCP_RESOURCE_BASE_PATH = `/${FIVEMCP_API_VERSION}`;
 export const FIVEMCP_EXTERNAL_BASE_URL = `http://127.0.0.1:30120/${FIVEMCP_RESOURCE_NAME}/${FIVEMCP_API_VERSION}`;
+export const FIVEMCP_TOKEN_HEADER = "x-fivemcp-token";
+export const FIVEMCP_MCP_TOKEN_HEADER = "x-fivemcp-mcp-token";
 
 export const FIVEMCP_TOKEN_CONVAR = "fivemcp_token";
 export const FIVEMCP_ANNOUNCEMENT_TEMPLATE_CONVAR =

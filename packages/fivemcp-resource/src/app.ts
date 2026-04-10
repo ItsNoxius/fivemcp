@@ -9,6 +9,7 @@ import {
   DEFAULT_ANNOUNCEMENT_TEMPLATE,
   EmptyObjectSchema,
   ErrorEnvelopeSchema,
+  FIVEMCP_TOKEN_HEADER,
   LOOPBACK_ADDRESSES,
   PlayerParamsSchema,
   PlayersResponseSchema,
@@ -148,18 +149,21 @@ function assertAuthorized(request: NormalizedRequest, runtime: FiveMRuntime): vo
     );
   }
 
-  const header = request.headers.authorization ?? "";
-  if (!header.startsWith("Bearer ")) {
+  const providedToken = (request.headers[FIVEMCP_TOKEN_HEADER] ?? "").trim();
+  if (!providedToken) {
     throw new HttpError(
       401,
-      "missing_bearer_token",
-      "Authorization header must be a Bearer token.",
+      "missing_auth_token",
+      `${FIVEMCP_TOKEN_HEADER} header must contain the token value.`,
     );
   }
 
-  const providedToken = header.slice("Bearer ".length).trim();
   if (!providedToken || providedToken !== expectedToken) {
-    throw new HttpError(401, "invalid_bearer_token", "Bearer token is invalid.");
+    throw new HttpError(
+      401,
+      "invalid_auth_token",
+      `${FIVEMCP_TOKEN_HEADER} token is invalid.`,
+    );
   }
 }
 

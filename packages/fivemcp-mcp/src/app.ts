@@ -1,4 +1,5 @@
 import express, { type Request, type Response } from "express";
+import { FIVEMCP_MCP_TOKEN_HEADER } from "@fivemcp/shared";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
@@ -24,8 +25,8 @@ function createMcpAuthMiddleware(expectedToken?: string) {
       return;
     }
 
-    const header = request.header("authorization") ?? "";
-    if (header !== `Bearer ${expectedToken}`) {
+    const header = request.header(FIVEMCP_MCP_TOKEN_HEADER) ?? "";
+    if (header !== expectedToken) {
       response.status(401).json({
         jsonrpc: "2.0",
         error: {

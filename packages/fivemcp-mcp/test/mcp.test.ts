@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:http";
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { FIVEMCP_MCP_TOKEN_HEADER, FIVEMCP_TOKEN_HEADER } from "@fivemcp/shared";
 
 import { createHttpApp } from "../src/app";
 import type { McpConfig } from "../src/config";
@@ -19,7 +20,7 @@ function mcpPost(
     .set("content-type", "application/json");
 
   if (authToken) {
-    req.set("authorization", `Bearer ${authToken}`);
+    req.set(FIVEMCP_MCP_TOKEN_HEADER, authToken);
   }
 
   return req.send(body);
@@ -47,11 +48,11 @@ async function startBackend(): Promise<{
   };
 
   app.use((req, res, next) => {
-    if (req.header("authorization") !== "Bearer backend-secret") {
+    if (req.header(FIVEMCP_TOKEN_HEADER) !== "backend-secret") {
       res.status(401).json({
         ok: false,
         error: {
-          code: "invalid_bearer_token",
+          code: "invalid_auth_token",
           message: "invalid token",
           status: 401,
         },

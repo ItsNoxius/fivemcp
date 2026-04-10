@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Player, Resource, StatusResponse } from "@fivemcp/shared";
+import { FIVEMCP_TOKEN_HEADER } from "@fivemcp/shared";
 
 import { createFiveMHttpApp } from "../src/app";
 import type { HttpRequest, HttpResponse } from "../src/httpTypes";
@@ -174,7 +175,7 @@ describe("createFiveMHttpApp", () => {
     expect(response.statusCode).toBe(401);
     expect(json).toMatchObject({
       ok: false,
-      error: { code: "missing_bearer_token" },
+      error: { code: "missing_auth_token" },
     });
   });
 
@@ -186,7 +187,7 @@ describe("createFiveMHttpApp", () => {
       app,
       createRequest("/v1/status", {
         address: "10.0.0.5",
-        headers: { authorization: "Bearer secret-token" },
+        headers: { [FIVEMCP_TOKEN_HEADER]: "secret-token" },
       }),
     );
 
@@ -205,7 +206,7 @@ describe("createFiveMHttpApp", () => {
       app,
       createRequest("/v1/status", {
         address: "127.0.0.1:45678",
-        headers: { authorization: "Bearer secret-token" },
+        headers: { [FIVEMCP_TOKEN_HEADER]: "secret-token" },
       }),
     );
 
@@ -223,7 +224,7 @@ describe("createFiveMHttpApp", () => {
       app,
       createRequest("/v1/status", {
         address: "[::1]:45678",
-        headers: { authorization: "Bearer secret-token" },
+        headers: { [FIVEMCP_TOKEN_HEADER]: "secret-token" },
       }),
     );
 
@@ -240,7 +241,7 @@ describe("createFiveMHttpApp", () => {
     const { response, json } = await invoke(
       app,
       createRequest("/v1/status", {
-        headers: { authorization: "Bearer secret-token" },
+        headers: { [FIVEMCP_TOKEN_HEADER]: "secret-token" },
       }),
     );
 
@@ -261,7 +262,7 @@ describe("createFiveMHttpApp", () => {
     const { response, json } = await invoke(
       app,
       createRequest("/v1/players", {
-        headers: { authorization: "Bearer secret-token" },
+        headers: { [FIVEMCP_TOKEN_HEADER]: "secret-token" },
       }),
     );
 
@@ -276,7 +277,7 @@ describe("createFiveMHttpApp", () => {
     const { response, json } = await invoke(
       app,
       createRequest("/v1/players/42", {
-        headers: { authorization: "Bearer secret-token" },
+        headers: { [FIVEMCP_TOKEN_HEADER]: "secret-token" },
       }),
     );
 
@@ -294,7 +295,7 @@ describe("createFiveMHttpApp", () => {
     const { response, json } = await invoke(
       app,
       createRequest("/v1/resources", {
-        headers: { authorization: "Bearer secret-token" },
+        headers: { [FIVEMCP_TOKEN_HEADER]: "secret-token" },
       }),
     );
 
@@ -331,7 +332,7 @@ describe("createFiveMHttpApp", () => {
     };
     const app = createFiveMHttpApp(commandCapturingRuntime);
 
-    const authHeaders = { authorization: "Bearer secret-token" };
+    const authHeaders = { [FIVEMCP_TOKEN_HEADER]: "secret-token" };
 
     await invoke(
       app,
@@ -411,7 +412,7 @@ describe("createFiveMHttpApp", () => {
       app,
       createRequest("/v1/resources/demo/start", {
         method: "POST",
-        headers: { authorization: "Bearer secret-token" },
+        headers: { [FIVEMCP_TOKEN_HEADER]: "secret-token" },
         body: {},
       }),
     );
@@ -446,7 +447,7 @@ describe("createFiveMHttpApp", () => {
       app,
       createRequest("/v1/resources/demo/restart", {
         method: "POST",
-        headers: { authorization: "Bearer secret-token" },
+        headers: { [FIVEMCP_TOKEN_HEADER]: "secret-token" },
         body: {},
       }),
     );
@@ -471,7 +472,7 @@ describe("createFiveMHttpApp", () => {
       })(),
     };
     const app = createFiveMHttpApp(runtime);
-    const authHeaders = { authorization: "Bearer secret-token" };
+    const authHeaders = { [FIVEMCP_TOKEN_HEADER]: "secret-token" };
 
     const result = await invoke(
       app,

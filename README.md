@@ -158,7 +158,7 @@ http://127.0.0.1:3001/mcp
 Your MCP client should connect to the Streamable HTTP endpoint above. If you set `MCP_AUTH_TOKEN`, the client must also send:
 
 ```http
-Authorization: Bearer <MCP_AUTH_TOKEN>
+X-FiveMCP-MCP-Token: <MCP_AUTH_TOKEN>
 ```
 
 ## FiveM Resource Setup
@@ -184,7 +184,8 @@ ensure fivemcp
 
 ### Notes
 
-- `fivemcp_token` is required. Requests without a matching bearer token are rejected.
+- `fivemcp_token` is required. Requests without a matching authorization token are rejected.
+- Backend requests must send the token in the `X-FiveMCP-Token` header.
 - The resource only accepts loopback callers:
   - `127.0.0.1`
   - `::1`
@@ -209,7 +210,7 @@ The MCP server is in [packages/fivemcp-mcp](C:/Users/dg2c4/Desktop/fivem-mcp/pac
 - `FIVEMCP_TIMEOUT_MS`
   - Default: `5000`
 - `MCP_AUTH_TOKEN`
-  - Optional. If set, callers must send `Authorization: Bearer <token>` to `/mcp`.
+  - Optional. If set, callers must send `X-FiveMCP-MCP-Token: <token>` to `/mcp`.
 
 ### Run In Dev
 
@@ -240,7 +241,7 @@ Note: `.env` support applies to the standalone MCP server only. The FiveM resour
 All backend routes require:
 
 ```http
-Authorization: Bearer <fivemcp_token>
+X-FiveMCP-Token: <fivemcp_token>
 ```
 
 ### Read Routes
@@ -282,14 +283,14 @@ Authorization: Bearer <fivemcp_token>
 
 ```powershell
 curl `
-  -H "Authorization: Bearer replace-with-secret" `
+  -H "X-FiveMCP-Token: replace-with-secret" `
   http://127.0.0.1:30120/fivemcp/v1/status
 ```
 
 ```powershell
 curl `
   -X POST `
-  -H "Authorization: Bearer replace-with-secret" `
+  -H "X-FiveMCP-Token: replace-with-secret" `
   -H "Content-Type: application/json" `
   -d "{\"message\":\"Hello from MCP\"}" `
   http://127.0.0.1:30120/fivemcp/v1/server/announce
