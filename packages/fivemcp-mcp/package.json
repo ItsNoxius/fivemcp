@@ -1,11 +1,20 @@
 {
   "name": "fivemcp",
   "version": "0.1.0",
+  "description": "MCP server for controlling a FiveM server resource over HTTP.",
   "type": "module",
   "bin": {
-    "fivemcp": "./bin/fivemcp.js"
+    "fivemcp": "bin/fivemcp.js"
   },
   "main": "./dist/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ItsNoxius/fivemcp.git"
+  },
+  "homepage": "https://github.com/ItsNoxius/fivemcp#readme",
+  "bugs": {
+    "url": "https://github.com/ItsNoxius/fivemcp/issues"
+  },
   "exports": {
     ".": "./dist/index.js"
   },
