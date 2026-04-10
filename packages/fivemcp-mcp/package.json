@@ -1,20 +1,33 @@
 {
-  "name": "@fivemcp/mcp",
+  "name": "fivemcp",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "bin": {
+    "fivemcp": "./bin/fivemcp.js"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --external:dotenv --outfile=dist/index.js",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --external:dotenv --external:express --external:@modelcontextprotocol/sdk --external:@modelcontextprotocol/sdk/* --outfile=dist/index.js",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
+    "prepack": "npm run build",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@fivemcp/shared": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^17.2.3",
     "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@fivemcp/shared": "0.1.0"
   }
 }

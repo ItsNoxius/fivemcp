@@ -127,6 +127,12 @@ FIVEMCP_TIMEOUT_MS=5000
 
 Then run the MCP server in a separate terminal.
 
+If you publish the package to npm, the intended CLI entrypoint is:
+
+```powershell
+npx fivemcp
+```
+
 Using `.env`:
 
 ```powershell
@@ -145,6 +151,12 @@ Or run the built version:
 ```powershell
 $env:FIVEMCP_TOKEN="replace-with-the-same-secret"
 node packages/fivemcp-mcp/dist/index.js
+```
+
+Or, from the package directory after building:
+
+```powershell
+npm exec --workspace fivemcp fivemcp
 ```
 
 The MCP endpoint will be:
@@ -196,6 +208,8 @@ ensure fivemcp
 
 The MCP server is in [packages/fivemcp-mcp](C:/Users/dg2c4/Desktop/fivem-mcp/packages/fivemcp-mcp).
 
+Its package name is `fivemcp`, and it now exposes a CLI bin with the same name for `npx fivemcp`.
+
 ### Environment Variables
 
 - These values may be provided through a root `.env` file.
@@ -218,6 +232,14 @@ If a root `.env` file exists, the MCP server loads it automatically.
 
 ```powershell
 npm run dev:mcp
+```
+
+### Run Via `npx`
+
+Once the package is published to npm, this starts the MCP server:
+
+```powershell
+npx fivemcp
 ```
 
 ### Run Built Server

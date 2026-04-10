@@ -11,7 +11,7 @@
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "dev:mcp": "npm run dev --workspace @fivemcp/mcp",
+    "dev:mcp": "npm run dev --workspace fivemcp",
     "build:resource": "npm run build --workspace @fivemcp/resource"
   },
   "devDependencies": {
