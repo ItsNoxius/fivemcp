@@ -52,6 +52,8 @@ interface RouteContext {
   runtime: FiveMRuntime;
 }
 
+type ResourceLifecycleAction = "start" | "stop" | "restart" | "ensure";
+
 function errorEnvelopeFrom(error: HttpError): ErrorEnvelope {
   return ErrorEnvelopeSchema.parse({
     ok: false,
@@ -89,12 +91,49 @@ function parseWithSchema<T>(
   return result.data;
 }
 
+function normalizeRemoteAddress(address: string): string {
+  const trimmed = address.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith("[")) {
+    const closingBracketIndex = trimmed.indexOf("]");
+    if (closingBracketIndex !== -1) {
+      return trimmed.slice(1, closingBracketIndex);
+    }
+  }
+
+  const lastColonIndex = trimmed.lastIndexOf(":");
+  if (lastColonIndex !== -1) {
+    const maybePort = trimmed.slice(lastColonIndex + 1);
+    if (/^\d+$/.test(maybePort)) {
+      const maybeHost = trimmed.slice(0, lastColonIndex);
+      if (
+        maybeHost === "127.0.0.1" ||
+        maybeHost === "::1" ||
+        maybeHost === "::ffff:127.0.0.1" ||
+        maybeHost === "localhost"
+      ) {
+        return maybeHost;
+      }
+    }
+  }
+
+  return trimmed;
+}
+
 function assertLoopback(address: string): void {
-  if (!LOOPBACK_ADDRESSES.has(address)) {
+  const normalizedAddress = normalizeRemoteAddress(address);
+  if (
+    normalizedAddress !== "localhost" &&
+    !LOOPBACK_ADDRESSES.has(normalizedAddress)
+  ) {
     throw new HttpError(
       403,
       "forbidden_origin",
       "Only loopback requests are allowed.",
+      `Received remote address: ${address}`,
     );
   }
 }
@@ -240,6 +279,162 @@ function createActionResult(
     message,
     auditEntry,
   });
+}
+
+async function waitForResourceState(
+  runtime: FiveMRuntime,
+  resourceName: string,
+  acceptableStates: string[],
+  timeoutMs = 1500,
+  intervalMs = 50,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() <= deadline) {
+    const currentState = runtime.getResourceState(resourceName);
+    if (acceptableStates.includes(currentState)) {
+      return currentState;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  return runtime.getResourceState(resourceName);
+}
+
+async function settleResourceState(
+  runtime: FiveMRuntime,
+  resourceName: string,
+): Promise<string> {
+  const currentState = runtime.getResourceState(resourceName);
+  if (currentState !== "starting" && currentState !== "stopping") {
+    return currentState;
+  }
+
+  return await waitForResourceState(runtime, resourceName, ["started", "stopped"]);
+}
+
+async function performResourceLifecycleAction(
+  runtime: FiveMRuntime,
+  action: ResourceLifecycleAction,
+  resourceName: string,
+): Promise<{ success: true; message: string } | { success: false; message: string }> {
+  let initialState = await settleResourceState(runtime, resourceName);
+
+  if (action === "start") {
+    if (initialState === "started") {
+      return { success: true, message: "Resource is already started." };
+    }
+
+    const started = runtime.startResource(resourceName);
+    if (!started) {
+      return { success: false, message: "StartResource returned false." };
+    }
+
+    const finalState = await waitForResourceState(runtime, resourceName, ["started"]);
+    if (finalState !== "started") {
+      return {
+        success: false,
+        message: `Resource did not reach started state. Current state: ${finalState}.`,
+      };
+    }
+
+    return { success: true, message: "Resource started successfully." };
+  }
+
+  if (action === "stop") {
+    if (initialState === "stopped") {
+      return { success: true, message: "Resource is already stopped." };
+    }
+
+    const stopped = runtime.stopResource(resourceName);
+    if (!stopped) {
+      return { success: false, message: "StopResource returned false." };
+    }
+
+    const finalState = await waitForResourceState(runtime, resourceName, ["stopped"]);
+    if (finalState !== "stopped") {
+      return {
+        success: false,
+        message: `Resource did not reach stopped state. Current state: ${finalState}.`,
+      };
+    }
+
+    return { success: true, message: "Resource stopped successfully." };
+  }
+
+  if (action === "restart") {
+    if (initialState === "stopped") {
+      const started = runtime.startResource(resourceName);
+      if (!started) {
+        return {
+          success: false,
+          message: "Resource was stopped and could not be started during restart.",
+        };
+      }
+
+      const startedState = await waitForResourceState(runtime, resourceName, ["started"]);
+      if (startedState !== "started") {
+        return {
+          success: false,
+          message: `Stopped resource could not be started during restart. Current state: ${startedState}.`,
+        };
+      }
+
+      return {
+        success: true,
+        message: "Resource was stopped and has been started successfully.",
+      };
+    }
+
+    const stopped = runtime.stopResource(resourceName);
+    if (!stopped) {
+      return { success: false, message: "StopResource returned false during restart." };
+    }
+
+    const stoppedState = await waitForResourceState(runtime, resourceName, ["stopped"]);
+    if (stoppedState !== "stopped") {
+      return {
+        success: false,
+        message: `Resource did not stop during restart. Current state: ${stoppedState}.`,
+      };
+    }
+
+    const started = runtime.startResource(resourceName);
+    if (!started) {
+      return { success: false, message: "StartResource returned false during restart." };
+    }
+
+    const finalState = await waitForResourceState(runtime, resourceName, ["started"]);
+    if (finalState !== "started") {
+      return {
+        success: false,
+        message: `Resource did not restart successfully. Current state: ${finalState}.`,
+      };
+    }
+
+    return { success: true, message: "Resource restarted successfully." };
+  }
+
+  initialState = await settleResourceState(runtime, resourceName);
+  if (initialState === "started") {
+    return { success: true, message: "Resource is already started." };
+  }
+
+  const started = runtime.startResource(resourceName);
+  if (!started) {
+    return { success: false, message: "StartResource returned false during ensure." };
+  }
+
+  const finalState = await waitForResourceState(runtime, resourceName, ["started"]);
+  if (finalState !== "started") {
+    return {
+      success: false,
+      message: `Resource did not reach started state during ensure. Current state: ${finalState}.`,
+    };
+  }
+
+  return { success: true, message: "Resource ensured successfully." };
 }
 
 export interface FiveMHttpApp {
@@ -479,7 +674,7 @@ export function createFiveMHttpApp(
   ] as const) {
     router.post(
       `/v1/resources/:resourceName/${pathAction}`,
-      ({ request, response, runtime: currentRuntime, auditLog: currentAuditLog }, match) => {
+      async ({ request, response, runtime: currentRuntime, auditLog: currentAuditLog }, match) => {
         parseWithSchema(
           EmptyObjectSchema,
           request.bodyJson,
@@ -500,7 +695,30 @@ export function createFiveMHttpApp(
           );
         }
 
-        const command = `${pathAction} ${params.resourceName}`;
+        const lifecycleResult = await performResourceLifecycleAction(
+          currentRuntime,
+          pathAction,
+          params.resourceName,
+        );
+
+        if (!lifecycleResult.success) {
+          const failedAuditEntry = createAuditEntry(
+            currentRuntime,
+            commandAction,
+            params.resourceName,
+            request.address,
+            false,
+            lifecycleResult.message,
+          );
+          currentAuditLog.append(failedAuditEntry);
+          throw new HttpError(
+            409,
+            "resource_lifecycle_failed",
+            `Failed to ${pathAction} resource.`,
+            lifecycleResult.message,
+          );
+        }
+
         const auditEntry = createAuditEntry(
           currentRuntime,
           commandAction,
@@ -509,27 +727,6 @@ export function createFiveMHttpApp(
           true,
           null,
         );
-
-        try {
-          currentRuntime.executeCommand(command);
-        } catch (error) {
-          const failedAuditEntry = createAuditEntry(
-            currentRuntime,
-            commandAction,
-            params.resourceName,
-            request.address,
-            false,
-            (error as Error).message,
-          );
-          currentAuditLog.append(failedAuditEntry);
-          throw new HttpError(
-            500,
-            "command_execution_failed",
-            `Failed to ${pathAction} resource.`,
-            (error as Error).message,
-          );
-        }
-
         currentAuditLog.append(auditEntry);
         sendJson(
           response,
@@ -538,7 +735,7 @@ export function createFiveMHttpApp(
             currentRuntime,
             commandAction,
             params.resourceName,
-            `Resource ${pathAction} command sent.`,
+            lifecycleResult.message,
             auditEntry,
           ),
         );

@@ -15,6 +15,9 @@ export interface FiveMRuntime {
   findPlayer(serverId: number): Player | null;
   listResources(): Resource[];
   findResource(resourceName: string): Resource | null;
+  getResourceState(resourceName: string): string;
+  startResource(resourceName: string): boolean;
+  stopResource(resourceName: string): boolean;
   executeCommand(command: string): void;
   nowIso(): string;
   randomId(): string;
@@ -111,6 +114,15 @@ export function createDefaultRuntime(): FiveMRuntime {
         return null;
       }
       return mapResource(resourceName);
+    },
+    getResourceState(resourceName) {
+      return GetResourceState(resourceName);
+    },
+    startResource(resourceName) {
+      return StartResource(resourceName);
+    },
+    stopResource(resourceName) {
+      return StopResource(resourceName);
     },
     executeCommand(command) {
       ExecuteCommand(command);

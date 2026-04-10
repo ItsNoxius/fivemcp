@@ -1,4 +1,15 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { config as loadDotenv } from "dotenv";
 import { FIVEMCP_EXTERNAL_BASE_URL } from "@fivemcp/shared";
+
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+loadDotenv();
+loadDotenv({
+  path: resolve(moduleDir, "../../../.env"),
+  override: false,
+});
 
 export interface McpConfig {
   backendBaseUrl: string;

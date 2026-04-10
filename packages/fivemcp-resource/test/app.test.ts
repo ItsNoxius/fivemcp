@@ -72,6 +72,10 @@ function createRequest(
 function createRuntime(): FiveMRuntime {
   const commands: string[] = [];
   const players: Player[] = [];
+  const resourceStates = new Map<string, string>([
+    ["fivemcp", "started"],
+    ["demo", "started"],
+  ]);
   const resources: Resource[] = [
     {
       name: "fivemcp",
@@ -112,7 +116,33 @@ function createRuntime(): FiveMRuntime {
     findPlayer: (serverId) => players.find((player) => player.serverId === serverId) ?? null,
     listResources: () => [...resources],
     findResource: (resourceName) =>
-      resources.find((resource) => resource.name === resourceName) ?? null,
+      resourceStates.get(resourceName) === undefined
+        ? null
+        : {
+            ...(resources.find((resource) => resource.name === resourceName) ?? {
+              name: resourceName,
+              author: null,
+              version: null,
+              description: null,
+              path: null,
+            }),
+            state: resourceStates.get(resourceName) ?? "missing",
+          },
+    getResourceState: (resourceName) => resourceStates.get(resourceName) ?? "missing",
+    startResource: (resourceName) => {
+      if (!resourceStates.has(resourceName)) {
+        return false;
+      }
+      resourceStates.set(resourceName, "started");
+      return true;
+    },
+    stopResource: (resourceName) => {
+      if (!resourceStates.has(resourceName)) {
+        return false;
+      }
+      resourceStates.set(resourceName, "stopped");
+      return true;
+    },
     executeCommand: (command) => {
       commands.push(command);
     },
@@ -164,6 +194,42 @@ describe("createFiveMHttpApp", () => {
     expect(json).toMatchObject({
       ok: false,
       error: { code: "forbidden_origin" },
+    });
+  });
+
+  it("accepts loopback callers reported with a port suffix", async () => {
+    const runtime = createRuntime();
+    const app = createFiveMHttpApp(runtime);
+
+    const { response, json } = await invoke(
+      app,
+      createRequest("/v1/status", {
+        address: "127.0.0.1:45678",
+        headers: { authorization: "Bearer secret-token" },
+      }),
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(json).toMatchObject({
+      serverName: "Test Server",
+    });
+  });
+
+  it("accepts bracketed IPv6 loopback callers with a port suffix", async () => {
+    const runtime = createRuntime();
+    const app = createFiveMHttpApp(runtime);
+
+    const { response, json } = await invoke(
+      app,
+      createRequest("/v1/status", {
+        address: "[::1]:45678",
+        headers: { authorization: "Bearer secret-token" },
+      }),
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(json).toMatchObject({
+      serverName: "Test Server",
     });
   });
 
@@ -241,11 +307,20 @@ describe("createFiveMHttpApp", () => {
     });
   });
 
-  it("executes resource lifecycle commands and shutdown", async () => {
-    const runtime = createRuntime();
+  it("uses native resource lifecycle operations and shutdown command", async () => {
     const commands: string[] = [];
+    const lifecycleCalls: string[] = [];
+    const baseRuntime = createRuntime();
     const commandCapturingRuntime: FiveMRuntime = {
-      ...runtime,
+      ...baseRuntime,
+      startResource(resourceName) {
+        lifecycleCalls.push(`start:${resourceName}`);
+        return baseRuntime.startResource(resourceName);
+      },
+      stopResource(resourceName) {
+        lifecycleCalls.push(`stop:${resourceName}`);
+        return baseRuntime.stopResource(resourceName);
+      },
       executeCommand(command) {
         commands.push(command);
       },
@@ -308,13 +383,79 @@ describe("createFiveMHttpApp", () => {
     );
 
     expect(commands).toEqual([
-      "start demo",
-      "stop demo",
-      "restart demo",
-      "ensure demo",
       "refresh",
       'quit "fivemcp shutdown requested"',
     ]);
+    expect(lifecycleCalls).toEqual([
+      "stop:demo",
+      "start:demo",
+    ]);
+  });
+
+  it("returns a lifecycle failure when native start does not reach the expected state", async () => {
+    const baseRuntime = createRuntime();
+    const app = createFiveMHttpApp({
+      ...baseRuntime,
+      startResource() {
+        return true;
+      },
+      getResourceState(resourceName) {
+        if (resourceName === "demo") {
+          return "stopped";
+        }
+        return baseRuntime.getResourceState(resourceName);
+      },
+    });
+
+    const { response, json } = await invoke(
+      app,
+      createRequest("/v1/resources/demo/start", {
+        method: "POST",
+        headers: { authorization: "Bearer secret-token" },
+        body: {},
+      }),
+    );
+
+    expect(response.statusCode).toBe(409);
+    expect(json).toMatchObject({
+      ok: false,
+      error: {
+        code: "resource_lifecycle_failed",
+      },
+    });
+  });
+
+  it("handles restart of an already stopped resource by starting it", async () => {
+    const baseRuntime = createRuntime();
+    baseRuntime.stopResource("demo");
+
+    const lifecycleCalls: string[] = [];
+    const app = createFiveMHttpApp({
+      ...baseRuntime,
+      startResource(resourceName) {
+        lifecycleCalls.push(`start:${resourceName}`);
+        return baseRuntime.startResource(resourceName);
+      },
+      stopResource(resourceName) {
+        lifecycleCalls.push(`stop:${resourceName}`);
+        return baseRuntime.stopResource(resourceName);
+      },
+    });
+
+    const { response, json } = await invoke(
+      app,
+      createRequest("/v1/resources/demo/restart", {
+        method: "POST",
+        headers: { authorization: "Bearer secret-token" },
+        body: {},
+      }),
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(json).toMatchObject({
+      message: "Resource was stopped and has been started successfully.",
+    });
+    expect(lifecycleCalls).toEqual(["start:demo"]);
   });
 
   it("sanitizes announcement commands and writes audit events", async () => {
